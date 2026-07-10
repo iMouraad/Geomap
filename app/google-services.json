@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "357625620809",
+    "firebase_url": "https://practiceappmovile-default-rtdb.firebaseio.com",
+    "project_id": "practiceappmovile",
+    "storage_bucket": "practiceappmovile.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:357625620809:android:b5ffd0c9f40118340d9298",
+        "android_client_info": {
+          "package_name": "com.example.myapplication"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbGN-l-eU8HkvFLikyb-Lbj_UhySpMCyc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
