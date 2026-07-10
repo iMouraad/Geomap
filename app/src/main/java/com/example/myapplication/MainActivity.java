@@ -1,11 +1,15 @@
 package com.example.myapplication;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.location.Location;
+import android.location.LocationManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
+import android.provider.Settings;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -41,18 +45,33 @@ import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
 
     private static final LatLng UTEQ = new LatLng(-1.012778, -79.469167);
     private static final long INTERVALO_MS = 5000L;
+    private static final int[] COLORES = {
+            Color.BLUE, Color.RED, Color.MAGENTA, Color.parseColor("#FF9800"), Color.CYAN
+    };
+
+    private static class Recorrido {
+        final List<LatLng> puntos = new ArrayList<>();
+        Marker marcador;
+        Polyline polyline;
+        final int color;
+
+        Recorrido(int color) {
+            this.color = color;
+        }
+    }
 
     private GoogleMap mMap;
-    private Marker marcadorActual;
-    private Polyline recorridoPolyline;
-    private final List<LatLng> recorrido = new ArrayList<>();
+    private final Map<String, Recorrido> recorridosPorDispositivo = new HashMap<>();
     private boolean camaraCentrada = false;
+    private String miDeviceId;
     private TextView tvLatitud;
     private TextView tvLongitud;
     private Button btnIniciarSeguimiento;
@@ -90,6 +109,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         btnIniciarSeguimiento = findViewById(R.id.btnIniciarSeguimiento);
         btnIniciarSeguimiento.setOnClickListener(v -> verificarYPedirPermisos());
 
+        miDeviceId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         coordenadasRef = FirebaseDatabase.getInstance().getReference("Coordenadas");
 
@@ -127,6 +147,14 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void onLocationPermissionGranted() {
+        if (!estaUbicacionActivada()) {
+            Toast.makeText(this,
+                    "El GPS/Ubicación está apagado en el sistema. Actívalo para poder rastrear.",
+                    Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+            return;
+        }
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             mMap.setMyLocationEnabled(true);
@@ -134,6 +162,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         iniciarCapturaUbicacion();
         btnIniciarSeguimiento.setText("Enviando mi ubicación...");
         btnIniciarSeguimiento.setEnabled(false);
+    }
+
+    private boolean estaUbicacionActivada() {
+        LocationManager locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        if (locationManager == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return locationManager.isLocationEnabled();
+        }
+        return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
     }
 
     private void iniciarCapturaUbicacion() {
@@ -148,11 +188,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 Location location = locationResult.getLastLocation();
                 if (location == null) return;
 
+                tvLatitud.setText(getString(R.string.formato_latitud, location.getLatitude()));
+                tvLongitud.setText(getString(R.string.formato_longitud, location.getLongitude()));
+
                 Coordenada coordenada = new Coordenada(
                         location.getLatitude(),
                         location.getLongitude(),
-                        System.currentTimeMillis());
-                coordenadasRef.push().setValue(coordenada);
+                        System.currentTimeMillis(),
+                        Build.MODEL);
+                coordenadasRef.child(miDeviceId).push().setValue(coordenada);
             }
         };
 
@@ -167,41 +211,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void escucharCambiosEnFirebase() {
         coordenadasRef.addChildEventListener(new ChildEventListener() {
             @Override
-            public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
-                if (!snapshot.hasChildren()) {
+            public void onChildAdded(DataSnapshot dispositivoSnapshot, String previousChildName) {
+                if (!dispositivoSnapshot.hasChildren()) {
                     return;
                 }
-
-                Coordenada coordenada = snapshot.getValue(Coordenada.class);
-                if (coordenada == null || coordenada.latitud == null || coordenada.longitud == null) {
-                    return;
-                }
-
-                LatLng punto = new LatLng(coordenada.latitud, coordenada.longitud);
-                recorrido.add(punto);
-
-                if (recorridoPolyline == null) {
-                    recorridoPolyline = mMap.addPolyline(new PolylineOptions()
-                            .addAll(recorrido)
-                            .width(10f)
-                            .color(Color.BLUE));
-                } else {
-                    recorridoPolyline.setPoints(recorrido);
-                }
-
-                if (marcadorActual == null) {
-                    marcadorActual = mMap.addMarker(new MarkerOptions()
-                            .position(punto)
-                            .title("Ubicación actual"));
-                } else {
-                    marcadorActual.setPosition(punto);
-                }
-
-                tvLatitud.setText(getString(R.string.formato_latitud, coordenada.latitud));
-                tvLongitud.setText(getString(R.string.formato_longitud, coordenada.longitud));
-
-                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(punto, camaraCentrada ? mMap.getCameraPosition().zoom : 18f));
-                camaraCentrada = true;
+                escucharPuntosDeDispositivo(dispositivoSnapshot.getKey());
             }
 
             @Override
@@ -221,6 +235,66 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 Toast.makeText(MainActivity.this,
                         "Error al leer Firebase: " + error.getMessage(),
                         Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void escucharPuntosDeDispositivo(String deviceId) {
+        coordenadasRef.child(deviceId).addChildEventListener(new ChildEventListener() {
+            @Override
+            public void onChildAdded(DataSnapshot snapshot, String previousChildName) {
+                Coordenada coordenada = snapshot.getValue(Coordenada.class);
+                if (coordenada == null || coordenada.latitud == null || coordenada.longitud == null) {
+                    return;
+                }
+
+                Recorrido recorrido = recorridosPorDispositivo.computeIfAbsent(deviceId,
+                        id -> new Recorrido(COLORES[recorridosPorDispositivo.size() % COLORES.length]));
+
+                LatLng punto = new LatLng(coordenada.latitud, coordenada.longitud);
+                recorrido.puntos.add(punto);
+
+                if (recorrido.polyline == null) {
+                    recorrido.polyline = mMap.addPolyline(new PolylineOptions()
+                            .addAll(recorrido.puntos)
+                            .width(10f)
+                            .color(recorrido.color));
+                } else {
+                    recorrido.polyline.setPoints(recorrido.puntos);
+                }
+
+                String etiqueta = deviceId.equals(miDeviceId)
+                        ? "Yo (este dispositivo)"
+                        : (coordenada.dispositivo != null ? coordenada.dispositivo : "Dispositivo remoto");
+
+                if (recorrido.marcador == null) {
+                    recorrido.marcador = mMap.addMarker(new MarkerOptions()
+                            .position(punto)
+                            .title(etiqueta));
+                } else {
+                    recorrido.marcador.setPosition(punto);
+                }
+
+                if (!camaraCentrada) {
+                    mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(punto, 18f));
+                    camaraCentrada = true;
+                }
+            }
+
+            @Override
+            public void onChildChanged(DataSnapshot snapshot, String previousChildName) {
+            }
+
+            @Override
+            public void onChildRemoved(DataSnapshot snapshot) {
+            }
+
+            @Override
+            public void onChildMoved(DataSnapshot snapshot, String previousChildName) {
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
             }
         });
     }
